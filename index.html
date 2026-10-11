@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <!-- Mantiene la schermata adatta agli smartphone senza zoom indesiderati -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+  
+  <!-- Configurazione per la modalità Fullscreen su iPhone (PWA) -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Figurine">
+  <meta name="theme-color" content="#2563eb">
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <link rel="icon" type="image/png" href="icon-192.png">
+  
+  <title>Gestore Figurine</title>
+
+  <style>
+    /* STILI CSS: definiscono l'aspetto grafico dell'app */
+    :root {
+      --primary: #2563eb;
+      --bg: #f8fafc;
+      --card-bg: #ffffff;
+      --text: #1e293b;
+      --missing: #e2e8f0;
+      --owned: #22c55e;
+      --duplicate: #3b82f6;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      margin: 0;
+      padding: 20px;
+      padding-bottom: 80px;
+    }
+
+    h1, h2, h3 { text-align: center; margin-bottom: 10px; }
+
+    .card {
+      background: var(--card-bg);
+      padding: 15px;
+      border-radius: 12px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+      margin-bottom: 20px;
+    }
+
+    /* Form e controlli */
+    input, button, select {
+      width: 100%;
+      padding: 12px;
+      margin: 6px 0;
+      border-radius: 8px;
+      border: 1px solid #cbd5e1;
+      font-size: 16px;
+      box-sizing: border-box;
+    }
+
+    button {
+      background-color: var(--primary);
+      color: white;
+      font-weight: bold;
+      border: none;
+      cursor: pointer;
+    }
+
+    button.secondary {
+      background-color: #64748b;
+    }
+
+    button.danger {
+      background-color: #ef4444;
+    }
+
+    /* Griglia delle figurine */
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(60px, 1fr));
+      gap: 10px;
+      margin-top: 15px;
+    }
+
+    .sticker {
+      aspect-ratio: 1;
+      background-color: var(--missing);
+      border-radius: 8px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-weight: bold;
+      font-size: 14px;
+      user-select: none;
+      position: relative;
+      cursor: pointer;
+    }
+
+    /* Stato: Posseduta */
+    .sticker.owned {
+      background-color: var(--owned);
+      color: white;
+    }
+
+    /* Stato: Doppione */
+    .sticker.duplicate {
+      background-color: var(--duplicate);
+      color: white;
+    }
+
+    .badge {
+      position: absolute;
+      top: -4px;
+      right: -4px;
+      background: #1e1b4b;
+      color: white;
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 10px;
+    }
+
+    /* Area Statistiche */
+    .stats {
+      display: flex;
+      justify-content: space-around;
+      text-align: center;
+      font-weight: bold;
+      margin-bottom: 10px;
+    }
+
+    .hidden { display: none; }
+
+    /* Grafico a torta (percentuale completamento) */
+    .pie {
+      --p: 0;
+      width: 110px;
+      height: 110px;
+      border-radius: 50%;
+      background: conic-gradient(var(--owned) calc(var(--p) * 1%), var(--missing) 0);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto;
+      position: relative;
+      flex-shrink: 0;
+    }
+    .pie::after {
+      content: attr(data-label);
+      width: 72%;
+      height: 72%;
+      border-radius: 50%;
+      background: var(--card-bg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: bold;
+      font-size: 20px;
+    }
+    .pie.mini { width: 38px; height: 38px; margin: 0; }
+    .pie.mini::after { font-size: 0; width: 56%; height: 56%; }
+
+    .overview-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 8px;
+      border-radius: 10px;
+      cursor: pointer;
+    }
+    .overview-item.active { background: #eff6ff; }
+    .overview-item .info { flex: 1; min-width: 0; }
+    .overview-item .name { font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .overview-item .sub { font-size: 13px; color: #64748b; }
+    .overview-item .pct { font-weight: bold; }
+
+    .action-group {
+      margin-top: 15px;
+      border-top: 1px solid #e2e8f0;
+      padding-top: 10px;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>📱 Le Mie Figurine</h1>
+
+  <!-- SEZIONE 1: Selezione e Creazione Album -->
+  <div class="card">
+    <label for="albumSelect"><strong>Seleziona Album:</strong></label>
+    <select id="albumSelect" onchange="switchAlbum()">
+      <!-- Popolato dinamicamente via JavaScript -->
+    </select>
+
+    <button onclick="toggleNewAlbumForm()" class="secondary">+ Nuovo Album</button>
+
+    <div id="newAlbumForm" class="hidden">
+      <h3>Crea Nuovo Album</h3>
+      <input type="text" id="albumName" placeholder="Nome Album (es. Calciatori)">
+      <input type="number" id="albumTotal" placeholder="Numero totale figurine">
+      <button onclick="createAlbum()">Salva Album</button>
+    </div>
+  </div>
+
+  <!-- SEZIONE 2: Dettagli e Griglia Figurina dell'Album selezionato -->
+  <div id="albumView" class="card hidden">
+    <h2 id="currentAlbumTitle">--</h2>
+
+    <!-- Percentuale di completamento con grafico a torta -->
+    <div id="bigPie" class="pie" data-label="0%"></div>
+    <p id="completionText" style="text-align:center; color:#64748b; margin:8px 0 16px;"></p>
+    
+    <div class="stats">
+      <div>Mancanti: <br><span id="statMissing" style="color:#ef4444">0</span></div>
+      <div>Ce l'ho: <br><span id="statOwned" style="color:#22c55e">0</span></div>
+      <div>Doppioni: <br><span id="statDuplicates" style="color:#2563eb">0</span></div>
+    </div>
+
+    <!-- La griglia dove compaiono i numeri -->
+    <div id="grid" class="grid"></div>
+
+    <!-- Nuova sezione per l'esportazione in TXT delle figurine dell'album attivo -->
+    <div class="action-group">
+      <h3>📄 Esporta Elenchi Testo</h3>
+      <button onclick="exportMissing()" class="secondary">Esporta Mancanti (.txt)</button>
+      <button onclick="exportDuplicates()" class="secondary">Esporta Doppie (.txt)</button>
+    </div>
+
+    <br>
+    <button onclick="deleteCurrentAlbum()" class="danger">Elimina Questo Album</button>
+  </div>
+
+  <!-- SEZIONE 2b: Panoramica di tutti gli album -->
+  <div id="overviewCard" class="card hidden">
+    <h3>📊 Completamento Album</h3>
+    <div id="overviewList"></div>
+  </div>
+
+  <!-- SEZIONE 3: Backup Dati Globale (JSON) -->
+  <div class="card">
+    <h3>💾 Backup Globale e Ripristino</h3>
+    <button onclick="exportData()" class="secondary">Esporta Dati (JSON)</button>
+    <input type="file" id="importFile" accept=".json" onchange="importData(event)" style="display:none">
+    <button onclick="document.getElementById('importFile').click()" class="secondary">Importa Dati (JSON)</button>
+  </div>
+
+  <script>
+    /* JAVASCRIPT: Gestisce la logica dei dati e dell'interfaccia */
+
+    // Struttura dati principale memorizzata in locale
+    function loadData() {
+      try {
+        const d = JSON.parse(localStorage.getItem('myStickersData'));
+        if (d && Array.isArray(d.albums)) return d;
+      } catch (e) { /* dati corrotti: riparte da zero */ }
+      return { currentAlbumId: null, albums: [] };
+    }
+    let appData = loadData();
+
+    // Salva i dati correnti su localStorage
+    function saveData() {
+      localStorage.setItem('myStickersData', JSON.stringify(appData));
+      render();
+    }
+
+    // Mostra/Nasconde il modulo per nuovo album
+    function toggleNewAlbumForm() {
+      const form = document.getElementById('newAlbumForm');
+      form.classList.toggle('hidden');
+    }
+
+    // Crea un nuovo album
+    function createAlbum() {
+      const name = document.getElementById('albumName').value.trim();
+      const total = parseInt(document.getElementById('albumTotal').value);
+
+      if (!name || isNaN(total) || total <= 0) {
+        alert("Inserisci un nome valido e un numero di figurine maggiore di 0.");
+        return;
+      }
+
+      // Crea l'oggetto album con la lista delle figurine inizializzate a 0
+      const newAlbum = {
+        id: Date.now().toString(),
+        name: name,
+        total: total,
+        stickers: Array(total).fill(0) // 0 = mancante
+      };
+
+      appData.albums.push(newAlbum);
+      appData.currentAlbumId = newAlbum.id;
+      
+      // Pulizia form
+      document.getElementById('albumName').value = '';
+      document.getElementById('albumTotal').value = '';
+      toggleNewAlbumForm();
+
+      saveData();
+    }
+
+    // Cambia l'album visualizzato
+    function switchAlbum() {
+      const select = document.getElementById('albumSelect');
+      appData.currentAlbumId = select.value;
+      saveData();
+    }
+
+    // Elimina l'album corrente
+    function deleteCurrentAlbum() {
+      if (confirm("Sei sicuro di voler eliminare questo album? L'azione è irreversibile.")) {
+        appData.albums = appData.albums.filter(a => a.id !== appData.currentAlbumId);
+        appData.currentAlbumId = appData.albums.length > 0 ? appData.albums[0].id : null;
+        saveData();
+      }
+    }
+
+    // Gestisce il tocco/click su una figurina
+    function handleStickerClick(index) {
+      const album = appData.albums.find(a => a.id === appData.currentAlbumId);
+      if (!album) return;
+
+      // Incrementa il conteggio (0 -> 1 -> 2 -> 3...)
+      album.stickers[index] += 1;
+      
+      saveData();
+    }
+
+    // Gestisce il tocco prolungato / menu contestuale per decrementare
+    function handleStickerRightClick(event, index) {
+      event.preventDefault(); // Impedisce il menu popup predefinito
+      const album = appData.albums.find(a => a.id === appData.currentAlbumId);
+      if (!album) return;
+
+      // Decrementa se maggiore di 0
+      if (album.stickers[index] > 0) {
+        album.stickers[index] -= 1;
+        saveData();
+      }
+    }
+
+    // Percentuale di completamento di un album (figurine diverse possedute / totale)
+    function percentOf(album) {
+      const owned = album.stickers.filter(c => c > 0).length;
+      return album.total > 0 ? Math.round((owned / album.total) * 100) : 0;
+    }
+
+    // Panoramica: tutti gli album con mini torta, cliccabili
+    function renderOverview() {
+      const card = document.getElementById('overviewCard');
+      const list = document.getElementById('overviewList');
+      list.innerHTML = '';
+      if (appData.albums.length === 0) { card.classList.add('hidden'); return; }
+      card.classList.remove('hidden');
+
+      appData.albums.forEach(album => {
+        const owned = album.stickers.filter(c => c > 0).length;
+        const pct = percentOf(album);
+
+        const row = document.createElement('div');
+        row.className = 'overview-item' + (album.id === appData.currentAlbumId ? ' active' : '');
+        row.onclick = () => { appData.currentAlbumId = album.id; saveData(); };
+
+        const pie = document.createElement('div');
+        pie.className = 'pie mini';
+        pie.style.setProperty('--p', pct);
+
+        const info = document.createElement('div');
+        info.className = 'info';
+        const name = document.createElement('div');
+        name.className = 'name';
+        name.textContent = album.name;
+        const sub = document.createElement('div');
+        sub.className = 'sub';
+        sub.textContent = `${owned} / ${album.total}`;
+        info.appendChild(name);
+        info.appendChild(sub);
+
+        const pctEl = document.createElement('div');
+        pctEl.className = 'pct';
+        pctEl.textContent = pct + '%';
+
+        row.appendChild(pie);
+        row.appendChild(info);
+        row.appendChild(pctEl);
+        list.appendChild(row);
+      });
+    }
+
+    // Aggiorna l'interfaccia utente (UI)
+    function render() {
+      const albumSelect = document.getElementById('albumSelect');
+      const albumView = document.getElementById('albumView');
+
+      // 1. Aggiorna il menu a tendina degli album
+      albumSelect.innerHTML = '';
+      if (appData.albums.length === 0) {
+        albumSelect.innerHTML = '<option value="">Nessun album presente</option>';
+        albumView.classList.add('hidden');
+        return;
+      }
+
+      appData.albums.forEach(album => {
+        const option = document.createElement('option');
+        option.value = album.id;
+        option.textContent = `${album.name} (${percentOf(album)}%)`;
+        if (album.id === appData.currentAlbumId) option.selected = true;
+        albumSelect.appendChild(option);
+      });
+
+      // 2. Trova l'album selezionato
+      const currentAlbum = appData.albums.find(a => a.id === appData.currentAlbumId);
+      renderOverview();
+      if (!currentAlbum) {
+        albumView.classList.add('hidden');
+        return;
+      }
+
+      albumView.classList.remove('hidden');
+      document.getElementById('currentAlbumTitle').textContent = currentAlbum.name;
+
+      // 3. Calcola Statistiche
+      let owned = 0;
+      let duplicates = 0;
+
+      currentAlbum.stickers.forEach(count => {
+        if (count > 0) owned++;
+        if (count > 1) duplicates += (count - 1);
+      });
+
+      document.getElementById('statOwned').textContent = owned;
+      document.getElementById('statMissing').textContent = currentAlbum.total - owned;
+      document.getElementById('statDuplicates').textContent = duplicates;
+
+      const pct = percentOf(currentAlbum);
+      const bigPie = document.getElementById('bigPie');
+      bigPie.style.setProperty('--p', pct);
+      bigPie.setAttribute('data-label', pct + '%');
+      document.getElementById('completionText').textContent =
+        `${owned} su ${currentAlbum.total} figurine`;
+
+      // 4. Disegna la Griglia delle Figurine
+      const grid = document.getElementById('grid');
+      grid.innerHTML = '';
+
+      currentAlbum.stickers.forEach((count, idx) => {
+        const el = document.createElement('div');
+        el.className = 'sticker';
+        el.textContent = idx + 1; // Numero figurina (da 1 a N)
+
+        if (count === 1) {
+          el.classList.add('owned');
+        } else if (count > 1) {
+          el.classList.add('duplicate');
+          const badge = document.createElement('span');
+          badge.className = 'badge';
+          badge.textContent = `+${count - 1}`;
+          el.appendChild(badge);
+        }
+
+        // Tocco normale: incrementa
+        el.onclick = () => handleStickerClick(idx);
+        
+        // Tocco lungo / Click destro: decrementa
+        el.oncontextmenu = (e) => handleStickerRightClick(e, idx);
+
+        grid.appendChild(el);
+      });
+    }
+
+    // --- FUNZIONE DI SUPPORTO PER IL DOWNLOAD DEI FILE TXT ---
+    function downloadTextFile(filename, content) {
+      const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const element = document.createElement('a');
+      element.href = url;
+      element.download = filename;
+      element.style.display = 'none';
+      document.body.appendChild(element);
+      element.click();
+      document.body.removeChild(element);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    // --- ESPORTAZIONE FIGURINE MANCANTI ---
+    function exportMissing() {
+      const currentAlbum = appData.albums.find(a => a.id === appData.currentAlbumId);
+      if (!currentAlbum) return;
+
+      let missingNumbers = [];
+      currentAlbum.stickers.forEach((count, idx) => {
+        if (count === 0) {
+          missingNumbers.push(idx + 1); // +1 perché l'indice parte da 0 ma la figurina da 1
+        }
+      });
+
+      if (missingNumbers.length === 0) {
+        alert("Complimenti! Non hai figurine mancanti in questo album.");
+        return;
+      }
+
+      let fileContent = `ALBUM: ${currentAlbum.name}\n`;
+      fileContent += `FIGURINE MANCANTI (${missingNumbers.length}):\n\n`;
+      fileContent += missingNumbers.join(', ');
+
+      const safeName = currentAlbum.name.toLowerCase().replace(/[^a-z0-9]/g, '_');
+      downloadTextFile(`mancanti_${safeName}.txt`, fileContent);
+    }
+
+    // --- ESPORTAZIONE FIGURINE DOPPIE ---
+    function exportDuplicates() {
+      const currentAlbum = appData.albums.find(a => a.id === appData.currentAlbumId);
+      if (!currentAlbum) return;
+
+      let duplicateLines = [];
+      let totalDuplicates = 0;
+
+      currentAlbum.stickers.forEach((count, idx) => {
+        if (count > 1) {
+          const extraCount = count - 1; // Quante ne ho in più oltre la prima
+          duplicateLines.push(`Figurina ${idx + 1} (x${extraCount})`);
+          totalDuplicates += extraCount;
+        }
+      });
+
+      if (duplicateLines.length === 0) {
+        alert("Non hai figurine doppie in questo album.");
+        return;
+      }
+
+      let fileContent = `ALBUM: ${currentAlbum.name}\n`;
+      fileContent += `FIGURINE DOPPIE (Totale pezzi extra: ${totalDuplicates}):\n\n`;
+      fileContent += duplicateLines.join('\n');
+
+      const safeName = currentAlbum.name.toLowerCase().replace(/[^a-z0-9]/g, '_');
+      downloadTextFile(`doppie_${safeName}.txt`, fileContent);
+    }
+
+    // --- IMPORT / EXPORT JSON GLOBALE ---
+
+    function exportData() {
+      downloadTextFile(`figurine_backup_${new Date().toISOString().slice(0,10)}.json`,
+        JSON.stringify(appData, null, 2));
+    }
+
+    function importData(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      const fileReader = new FileReader();
+      fileReader.onload = function(e) {
+        try {
+          const imported = JSON.parse(e.target.result);
+          const valid = imported && Array.isArray(imported.albums) &&
+            imported.albums.every(a => a && a.id && a.name && a.total > 0 && Array.isArray(a.stickers));
+          if (!valid) {
+            alert("File JSON non valido.");
+          } else if (confirm("L'importazione sostituirà tutti i dati attuali. Continuare?")) {
+            appData = imported;
+            if (!appData.albums.some(a => a.id === appData.currentAlbumId)) {
+              appData.currentAlbumId = appData.albums.length ? appData.albums[0].id : null;
+            }
+            saveData();
+            alert("Dati importati con successo!");
+          }
+        } catch (err) {
+          alert("Errore nella lettura del file JSON.");
+        }
+        event.target.value = ''; // permette di reimportare lo stesso file
+      };
+      fileReader.readAsText(file);
+    }
+
+    // Primo avvio
+    render();
+
+    // Service worker: permette l'installazione e l'uso offline
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+    }
+  </script>
+</body>
+</html>
