@@ -1,5 +1,5 @@
 // Service worker: cache dell'app per uso offline (network-first, fallback cache)
-const CACHE = 'figurine-v1';
+const CACHE = 'figurine-v2';
 const FILES = ['./', 'index.html', 'manifest.json', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
@@ -16,6 +16,7 @@ self.addEventListener('activate', e => {
 
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
+  if (new URL(e.request.url).origin !== location.origin) return; // niente cache per le API di GitHub
   e.respondWith(
     fetch(e.request)
       .then(res => {

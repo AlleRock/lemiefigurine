@@ -131,6 +131,13 @@
 
     .hidden { display: none; }
 
+    /* Modalità sola lettura (iPhone / nessun token) */
+    .readonly .edit-only { display: none !important; }
+    .readonly .sticker { cursor: default; }
+    .sync-status { text-align: center; font-size: 14px; color: #64748b; margin: 4px 0 8px; }
+    .sync-status.ok { color: #16a34a; }
+    .sync-status.err { color: #dc2626; }
+
     /* Grafico a torta (percentuale completamento) */
     .pie {
       --p: 0;
@@ -192,7 +199,7 @@
       <!-- Popolato dinamicamente via JavaScript -->
     </select>
 
-    <button onclick="toggleNewAlbumForm()" class="secondary">+ Nuovo Album</button>
+    <button onclick="toggleNewAlbumForm()" class="secondary edit-only">+ Nuovo Album</button>
 
     <div id="newAlbumForm" class="hidden">
       <h3>Crea Nuovo Album</h3>
@@ -227,7 +234,7 @@
     </div>
 
     <br>
-    <button onclick="deleteCurrentAlbum()" class="danger">Elimina Questo Album</button>
+    <button onclick="deleteCurrentAlbum()" class="danger edit-only">Elimina Questo Album</button>
   </div>
 
   <!-- SEZIONE 2b: Panoramica di tutti gli album -->
@@ -236,12 +243,24 @@
     <div id="overviewList"></div>
   </div>
 
+  <!-- SEZIONE 2c: Sincronizzazione GitHub -->
+  <div class="card">
+    <h3>☁️ Sincronizzazione GitHub</h3>
+    <p id="syncStatus" class="sync-status"></p>
+    <div id="tokenArea">
+      <input type="password" id="ghTokenInput" placeholder="Token GitHub (solo sul PC)" autocomplete="off">
+      <button onclick="saveToken()" class="secondary">Salva token e attiva modifica</button>
+    </div>
+    <button onclick="syncNow()" class="secondary">🔄 Aggiorna ora</button>
+    <button id="removeTokenBtn" onclick="removeToken()" class="secondary hidden">Rimuovi token da questo dispositivo</button>
+  </div>
+
   <!-- SEZIONE 3: Backup Dati Globale (JSON) -->
   <div class="card">
     <h3>💾 Backup Globale e Ripristino</h3>
     <button onclick="exportData()" class="secondary">Esporta Dati (JSON)</button>
     <input type="file" id="importFile" accept=".json" onchange="importData(event)" style="display:none">
-    <button onclick="document.getElementById('importFile').click()" class="secondary">Importa Dati (JSON)</button>
+    <button onclick="document.getElementById('importFile').click()" class="secondary edit-only">Importa Dati (JSON)</button>
   </div>
 
   <script>
@@ -258,8 +277,10 @@
     let appData = loadData();
 
     // Salva i dati correnti su localStorage
-    function saveData() {
+    // sync = false per i cambi solo grafici (es. cambio album), che non vanno inviati a GitHub
+    function saveData(sync = true) {
       localStorage.setItem('myStickersData', JSON.stringify(appData));
+      if (sync && isEditMode()) schedulePush();
       render();
     }
 
@@ -271,6 +292,7 @@
 
     // Crea un nuovo album
     function createAlbum() {
+      if (!isEditMode()) return;
       const name = document.getElementById('albumName').value.trim();
       const total = parseInt(document.getElementById('albumTotal').value);
 
@@ -302,11 +324,12 @@
     function switchAlbum() {
       const select = document.getElementById('albumSelect');
       appData.currentAlbumId = select.value;
-      saveData();
+      saveData(false);
     }
 
     // Elimina l'album corrente
     function deleteCurrentAlbum() {
+      if (!isEditMode()) return;
       if (confirm("Sei sicuro di voler eliminare questo album? L'azione è irreversibile.")) {
         appData.albums = appData.albums.filter(a => a.id !== appData.currentAlbumId);
         appData.currentAlbumId = appData.albums.length > 0 ? appData.albums[0].id : null;
@@ -316,6 +339,7 @@
 
     // Gestisce il tocco/click su una figurina
     function handleStickerClick(index) {
+      if (!isEditMode()) return;
       const album = appData.albums.find(a => a.id === appData.currentAlbumId);
       if (!album) return;
 
@@ -328,6 +352,7 @@
     // Gestisce il tocco prolungato / menu contestuale per decrementare
     function handleStickerRightClick(event, index) {
       event.preventDefault(); // Impedisce il menu popup predefinito
+      if (!isEditMode()) return;
       const album = appData.albums.find(a => a.id === appData.currentAlbumId);
       if (!album) return;
 
@@ -358,7 +383,7 @@
 
         const row = document.createElement('div');
         row.className = 'overview-item' + (album.id === appData.currentAlbumId ? ' active' : '');
-        row.onclick = () => { appData.currentAlbumId = album.id; saveData(); };
+        row.onclick = () => { appData.currentAlbumId = album.id; saveData(false); };
 
         const pie = document.createElement('div');
         pie.className = 'pie mini';
@@ -569,8 +594,164 @@
       fileReader.readAsText(file);
     }
 
+    // ================= SINCRONIZZAZIONE GITHUB =================
+    // PC (con token): legge e scrive data.json nel repo. iPhone (senza token): solo lettura.
+    const GH_API = 'https://api.github.com/repos/AlleRock/lemiefigurine/contents/data.json';
+    let ghToken = localStorage.getItem('figurineGhToken') || '';
+    let remoteSha = null;
+    let pushTimer = null, pushing = false, pendingPush = false;
+
+    function isEditMode() { return !!ghToken; }
+
+    function toB64(str) {
+      const bytes = new TextEncoder().encode(str);
+      let bin = '';
+      bytes.forEach(b => bin += String.fromCharCode(b));
+      return btoa(bin);
+    }
+    function fromB64(b64) {
+      const bin = atob(b64.replace(/\s/g, ''));
+      return new TextDecoder().decode(Uint8Array.from(bin, c => c.charCodeAt(0)));
+    }
+
+    function ghHeaders(extra) {
+      const h = Object.assign({ 'Accept': 'application/vnd.github+json' }, extra || {});
+      if (ghToken) h['Authorization'] = 'Bearer ' + ghToken;
+      return h;
+    }
+
+    function setSyncStatus(msg, kind) {
+      const el = document.getElementById('syncStatus');
+      el.textContent = msg;
+      el.className = 'sync-status' + (kind ? ' ' + kind : '');
+    }
+
+    function applyMode() {
+      document.body.classList.toggle('readonly', !isEditMode());
+      document.getElementById('tokenArea').classList.toggle('hidden', isEditMode());
+      document.getElementById('removeTokenBtn').classList.toggle('hidden', !isEditMode());
+      setSyncStatus(isEditMode() ? '✏️ Modalità modifica' : '👁️ Sola lettura: i dati arrivano da GitHub');
+    }
+
+    // Scarica data.json; restituisce null se non esiste ancora
+    async function pullRemote() {
+      const res = await fetch(GH_API + '?ref=main&t=' + Date.now(), { headers: ghHeaders(), cache: 'no-store' });
+      if (res.status === 404) { remoteSha = null; return null; }
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const j = await res.json();
+      remoteSha = j.sha;
+      return JSON.parse(fromB64(j.content));
+    }
+
+    function adoptRemote(remote) {
+      if (!remote || !Array.isArray(remote.albums)) return;
+      const keep = appData.currentAlbumId;
+      appData = remote;
+      if (keep && appData.albums.some(a => a.id === keep)) appData.currentAlbumId = keep;
+      else if (!appData.albums.some(a => a.id === appData.currentAlbumId)) {
+        appData.currentAlbumId = appData.albums.length ? appData.albums[0].id : null;
+      }
+      localStorage.setItem('myStickersData', JSON.stringify(appData));
+      render();
+    }
+
+    function schedulePush() {
+      localStorage.setItem('figurineDirty', '1');
+      setSyncStatus('⏳ Modifiche da salvare…');
+      clearTimeout(pushTimer);
+      pushTimer = setTimeout(pushRemote, 1500);
+    }
+
+    async function refreshSha() {
+      const res = await fetch(GH_API + '?ref=main&t=' + Date.now(), { headers: ghHeaders(), cache: 'no-store' });
+      remoteSha = res.ok ? (await res.json()).sha : null;
+    }
+
+    async function pushRemote() {
+      if (!isEditMode()) return;
+      clearTimeout(pushTimer);
+      if (pushing) { pendingPush = true; return; }
+      pushing = true;
+      setSyncStatus('⏳ Salvataggio su GitHub…');
+      try {
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const body = {
+            message: 'Aggiornamento figurine ' + new Date().toISOString(),
+            content: toB64(JSON.stringify(appData, null, 2)),
+            branch: 'main'
+          };
+          if (remoteSha) body.sha = remoteSha;
+          const res = await fetch(GH_API, {
+            method: 'PUT',
+            headers: ghHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify(body)
+          });
+          if (res.ok) {
+            remoteSha = (await res.json()).content.sha;
+            if (!pendingPush) localStorage.removeItem('figurineDirty');
+            setSyncStatus('☁️ Sincronizzato alle ' + new Date().toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' }), 'ok');
+            break;
+          }
+          if ((res.status === 409 || res.status === 422) && attempt === 0) { await refreshSha(); continue; }
+          if (res.status === 401 || res.status === 403) throw new Error('token non valido o senza permessi');
+          throw new Error('HTTP ' + res.status);
+        }
+      } catch (e) {
+        setSyncStatus('⚠️ Errore di sincronizzazione: ' + e.message, 'err');
+      } finally {
+        pushing = false;
+        if (pendingPush) { pendingPush = false; schedulePush(); }
+      }
+    }
+
+    async function initSync() {
+      applyMode();
+      try {
+        const remote = await pullRemote();
+        if (isEditMode()) {
+          const dirty = localStorage.getItem('figurineDirty') === '1';
+          if (dirty || (!remote && appData.albums.length)) await pushRemote();   // il locale vince
+          else if (remote) { adoptRemote(remote); applyMode(); setSyncStatus('☁️ Dati aggiornati da GitHub', 'ok'); }
+        } else if (remote) {
+          adoptRemote(remote);
+          setSyncStatus('👁️ Sola lettura · aggiornato ' + new Date().toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' }), 'ok');
+        }
+      } catch (e) {
+        setSyncStatus((isEditMode() ? '✏️ Modifica' : '👁️ Sola lettura') + ' · offline, uso i dati salvati sul dispositivo', 'err');
+      }
+    }
+
+    function saveToken() {
+      const v = document.getElementById('ghTokenInput').value.trim();
+      if (!v) { alert("Incolla il token GitHub."); return; }
+      ghToken = v;
+      localStorage.setItem('figurineGhToken', v);
+      document.getElementById('ghTokenInput').value = '';
+      initSync();
+      render();
+    }
+
+    function removeToken() {
+      if (!confirm("Rimuovere il token? Questo dispositivo tornerà in sola lettura.")) return;
+      ghToken = '';
+      localStorage.removeItem('figurineGhToken');
+      localStorage.removeItem('figurineDirty');
+      initSync();
+      render();
+    }
+
+    function syncNow() {
+      if (isEditMode()) pushRemote(); else initSync();
+    }
+
+    // In sola lettura: ricarica i dati quando riapri l'app
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && !isEditMode()) initSync();
+    });
+
     // Primo avvio
     render();
+    initSync();
 
     // Service worker: permette l'installazione e l'uso offline
     if ('serviceWorker' in navigator) {
